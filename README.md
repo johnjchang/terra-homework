@@ -3,6 +3,13 @@
 This repo contains the homework instructions as well as skeleton code that you
 can fill in to complete the homework.
 
+## Getting help
+
+If something is not clear or you get stuck, ask for help in the #homework-help
+channel on the event's Discord server.
+
+## Organization
+
 The repo is organized as follows:
 
 * `HOMEWORK.md`: The instructions/spec for the homework. Read this README first,
@@ -70,9 +77,13 @@ npm install scripts/
     it to stdout.
 * Once you have created a wallet (and saved a copy of its private key), send
   yourself some Luna using https://faucet.terra.money/.
-* Add your new private key to `keys.terrain.js`. Just add a new entry called
+* Copy the file `keys.terrain.js.sample` to `keys.terrain.js`. Then add your new private key to `keys.terrain.js`. Just add a new entry called
   "myKey" (or whatever name you want, really) similar to the keys that are
   already there. You'll need to remember the name "myKey" for later commands.
+  `keys.terrain.js` should NEVER be pushed to public repo (that is why it is in `.gitignore`) to avoid leaking your new private key! You
+  should treat your private key just like a password since anyone that has it
+  will be able to take your balance from the blockchain. NEVER publish your
+  private keys, even if they are only used on testnet!
 
 ## Workflow
 
@@ -102,7 +113,7 @@ See `contracts/counter/contract.rs` for an example of how to write unit tests
 and mock dependencies. You can also look at open source projects, for example:
 https://github.com/terraswap/terraswap/blob/main/packages/terraswap/src/testing.rs.
 
-### Deploy a smart contract
+### Deploying a smart contract
 
 Once your code seems to be in good shape (it should at least compile and pass
 unit tests), you can deploy it to Testnet. You should only deploy each contract
@@ -151,7 +162,7 @@ single `terrain deploy` command (without the `--no-rebuild` flag), but
 unfortunately we couldn't get `terrain` to play nicely with multiple contracts
 in the same repo so for now just stick to running both steps separately.
 
-### Migrate a smart contract
+### Migrating a smart contract
 
 Migrating a contract is similar to deploying it, but you should use these
 commands instead:
@@ -164,7 +175,7 @@ npx @terra-money/terrain contract:migrate $CONTRACT_NAME --signer $SGNER --netwo
 ```
 
 When you migrate a contract like this, the `migrate` Rust method of your
-contract will be executed (with the new code), giving you a change to update
+contract will be executed (with the new code), giving you a chance to update
 whatever data is stored in the contract to be compatible with the new code.
 
 ### Running scripts inside `scripts/`
@@ -188,4 +199,4 @@ fiddling with flags, but you can do whatever you want.
 
 ## Homework
 
-Now that you are done with this README, continue by reading `HOMEWORK.md`!
+Now that you are done with this README, continue by reading [`HOMEWORK.md`](https://github.com/am-work/terra-homework/blob/master/HOMEWORK.md)!
