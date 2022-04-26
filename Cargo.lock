@@ -474,6 +474,7 @@ dependencies = [
  "cw2",
  "schemars",
  "serde",
+ "shared",
  "thiserror",
 ]
 
