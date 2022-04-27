@@ -324,13 +324,26 @@ pub fn execute_withdraw(
 }
 
 pub fn try_start_undelegation(
-    _deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
-    _amount: Uint128,
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    // TODO
-    Err(ContractError::NotImplemented {})
+
+    let state: State = STATE.load(deps.storage)?;
+
+    //priv check
+    if state.owner != info.sender{
+        return Err(ContractError::Unauthorized{});
+    }
+
+    //fabricate unstake
+    let unstake_msg = CosmosMsg::Staking(StakingMsg::Undelegate{
+        validator: _VALIDATOR.into(),
+        amount: Coin::new(amount.into(), String::from("uluna")),
+    });
+
+    Ok(Response::new().add_message(unstake_msg).add_attributes(vec![attr("action", "undelegate")]))
 }
 
 pub fn query_exchange_rates(
