@@ -82,7 +82,7 @@ pub fn execute_buy(
     let mint_msg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: state.token_address.into(),
         funds: vec![],
-        msg: to_binary(&Cw20ExecuteMsg::Mint {
+        msg: to_binary(&Cw20ExecuteMsg::Transfer {
             recipient: info.sender.into(),
             amount: lemons_to_sell,
         })?,
