@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
     pub token_address: Addr,
+    pub oracle_address: Addr,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -15,7 +16,7 @@ pub enum ExecuteMsg {
 
     // Withdraw
     Withdraw { amount: u64 }, // Step 1: claim rewards from validators
-    WithdrawStep2ConvertRewardsToLuna { amount: u64 },
+    WithdrawStep2ConvertRewardsToLuna { },
     WithdrawStep3SendLuna { amount: u64 },
 
     // StartUndelegation

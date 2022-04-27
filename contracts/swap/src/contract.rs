@@ -29,7 +29,7 @@ pub fn instantiate(
 
     let state: State = State{
         owner: info.sender,
-        token_address: msg.token_address,
+        token_address: deps.api.addr_validate(msg.token_address)?,
         oracle_address: msg.oracle_address,
     };
 
@@ -46,7 +46,7 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg{
-        ExecuteMsg::Buy {} => execute_buy(deps, info),
+        ExecuteMsg::Buy {} => execute_buy(deps, info, 0u64),
         ExecuteMsg::Withdraw { amount } => execute_withdraw(deps, env, info, amount),
     }
 }
@@ -72,8 +72,8 @@ pub fn execute_buy(
     let state: State = STATE.load(deps.storage)?;
 
     //query oracle price
-    let price: u64 = query_oracle(deps.as_ref(), state.oracle_address.clone())?;
-    
+    let mut price: u64 = query_oracle(deps.as_ref(), state.oracle_address)?;
+
     //calc lemon quantity
     let lemons_to_sell: Uint128 = Uint128::from(1u64).multiply_ratio(luna_payment.amount, Uint128::from(price));
 
@@ -118,7 +118,7 @@ pub fn execute_withdraw(
     //sketchy convert
     let amount: u64 = amount as u64;
 
-    //extract all luna
+    //check balance
     let balance: Uint128 = query_balance(&deps.querier, &env.contract.address, String::from("uluna"))?;
 
     if balance < amount.into(){

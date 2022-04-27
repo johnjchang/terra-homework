@@ -2,16 +2,20 @@
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     Binary, Deps, DepsMut,
-    Empty, Env, MessageInfo, Response, StdError, StdResult, SubMsg, Uint128,
+    Empty, Env, MessageInfo, Response, StdError, StdResult, SubMsg, Uint128, attr, Coin,
+    CosmosMsg, to_binary, WasmMsg, StakingMsg, WasmQuery, QueryRequest, Addr, DistributionMsg, BankMsg
 };
 use cw0::must_pay;
 use cw2::set_contract_version;
-//use cw20::Cw20ExecuteMsg;
+use cw20::Cw20ExecuteMsg;
+use shared::oracle::{QueryMsg as oracle_query, PriceResponse};
 
-use terra_cosmwasm::{ExchangeRatesResponse, TerraMsgWrapper, TerraQuerier};
+use terra_cosmwasm::{ExchangeRatesResponse, TerraMsgWrapper, TerraQuerier, create_swap_msg};
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::state::{STATE, State};
+use shared::querier::*;
 
 // use oracle::contract::query_price;
 // use oracle::msg::PriceResponse;
@@ -30,13 +34,20 @@ const _VALIDATOR: &str = "terravaloper1ze5dxzs4zcm60tg48m9unp8eh7maerma38dl84";
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
-    _msg: InstantiateMsg,
+    env: Env,
+    info: MessageInfo,
+    msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // TODO
+    let state: State = State{
+        owner: info.sender,
+        token_address: msg.token_address,
+        oracle_address: msg.oracle_address,
+    };
+
+    STATE.save(deps.storage, &state)?;
+
     Ok(Response::new())
 }
 
@@ -53,67 +64,263 @@ pub fn migrate(_deps: DepsMut, _env: Env, _msg: Empty) -> Result<Response, Contr
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
-    _deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
-    _msg: ExecuteMsg,
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    msg: ExecuteMsg,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    // TODO
-    Err(ContractError::NotImplemented {})
+    match msg {
+        // Buy
+        ExecuteMsg::Buy {} => try_buy(deps, env, info),
+
+        // Withdraw
+        ExecuteMsg::Withdraw { amount } => try_withdraw_step1_collect_rewards(deps, env, info, amount), // Step 1: claim rewards from validators
+        ExecuteMsg::WithdrawStep2ConvertRewardsToLuna {  } => try_withdraw_step2_convert_all_native_coins_to_luna(deps, env, info),
+        ExecuteMsg::WithdrawStep3SendLuna { amount } => try_withdraw_step3_send_luna(deps, env, info, amount),
+
+        // StartUndelegation
+        ExecuteMsg::StartUndelegation { amount } => try_start_undelegation(deps, env, info, amount),
+    }
 }
 
 pub fn try_buy(
-    _deps: DepsMut,
-    _env: Env,
+    deps: DepsMut,
+    env: Env,
     info: MessageInfo,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    let _payment_amt =
-        must_pay(&info, "uluna").map_err(|error| StdError::generic_err(format!("{}", error)))?;
 
-    // TODO
-    Ok(Response::<TerraMsgWrapper>::new())
+    //fetch luna sent
+    let luna_payment: &Coin = 
+        info
+            .funds
+            .iter()
+            .find(|x| x.denom == String::from("uluna") && x.amount > Uint128::zero())
+            .ok_or_else(||{
+                ContractError::InvalidQuantity{}
+        })?;
+
+    //fetch state
+    let state: State = STATE.load(deps.storage)?;
+
+    //query oracle price
+    let price: u64 = query_oracle(deps.as_ref(), state.oracle_address.clone())?;
+    
+    //calc lemon quantity
+    let lemons_to_sell: Uint128 = Uint128::from(1u64).multiply_ratio(luna_payment.amount, Uint128::from(price));
+
+    //send lemon
+    //cw20 mint
+    let mint_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+        contract_addr: state.token_address.into(),
+        funds: vec![],
+        msg: to_binary(&Cw20ExecuteMsg::Transfer {
+            recipient: info.sender.into(),
+            amount: lemons_to_sell,
+        })?,
+    });
+
+    //delegate luna
+    let delegate_msg = CosmosMsg::Staking(StakingMsg::Delegate {
+        validator: String::from(_VALIDATOR),
+        amount: Coin::new(luna_payment.amount.into(), "uluna"),
+    });
+
+
+    let res = Response::new()
+        .add_attributes(vec![attr("action", "buy_lemons")])
+        .add_messages(vec![mint_msg, delegate_msg]);
+
+    Ok(res)
 }
 
 pub fn try_withdraw_step1_collect_rewards(
     deps: DepsMut,
     env: Env,
-    _info: MessageInfo,
-    _amount: u64,
+    info: MessageInfo,
+    amount: u64,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    // Step 1: Collect all rewards we have accrued.
 
-    let _reward_submessages = collect_all_rewards(deps, &env)?;
+    //priv check
+    let state: State = STATE.load(deps.storage)?;
+
+    if state.owner != info.sender {
+        return Err(ContractError::Unauthorized{});
+    }
+
+    // Step 1: Collect all rewards we have accrued.
+    let mut submessages: Vec<SubMsg<TerraMsgWrapper>> = vec![];
+
+    //fabricate reward collection sub-messages
+    let mut reward_submessages = collect_all_rewards(deps, &env)?;
+    submessages.append(&mut reward_submessages);
+
+    //fabricate swap submessage
+    submessages.push(SubMsg::new(CosmosMsg::Wasm(WasmMsg::Execute{
+        contract_addr: env.contract.address.clone().into(),
+        msg: to_binary(&ExecuteMsg::WithdrawStep2ConvertRewardsToLuna{})?,
+        funds: vec![],
+    })));
+
+    //fabricate send luna message
+    let send_msg = CosmosMsg::Wasm(WasmMsg::Execute{
+        contract_addr: env.contract.address.into(),
+        funds: vec![],
+        msg: to_binary(&ExecuteMsg::WithdrawStep3SendLuna{amount})?,
+    });
+
 
     // TODO
-    Ok(Response::<TerraMsgWrapper>::new())
+    Ok(Response::<TerraMsgWrapper>::new()
+        .add_submessages(reward_submessages)
+        .add_message(send_msg))
 }
 
 pub fn collect_all_rewards(
-    _deps: DepsMut,
-    _env: &Env,
+    deps: DepsMut,
+    env: &Env,
 ) -> Result<Vec<SubMsg<TerraMsgWrapper>>, ContractError> {
-    // TODO
-    Err(ContractError::NotImplemented {})
+
+    //stolen from basset hub
+    let mut messages: Vec<SubMsg<TerraMsgWrapper>> = vec![];
+    let delegations = deps.querier.query_all_delegations(env.contract.address.clone());
+    
+    if let Ok(delegations) = delegations{
+        for delegation in delegations{
+            let msg: CosmosMsg = CosmosMsg::Distribution(DistributionMsg::WithdrawDelegatorReward{
+                validator: delegation.validator,
+            });
+        }
+    }
+
+    Ok(messages)
 }
+
 
 pub fn try_withdraw_step2_convert_all_native_coins_to_luna(
-    _deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
-    _amount: u64,
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    // TODO
-    Err(ContractError::NotImplemented {})
+
+    //priv check
+    if info.sender != env.contract.address {
+        return Err(ContractError::Unauthorized{});
+    }
+
+    let balance = deps.querier.query_all_balances(env.contract.address.clone())?;
+    let mut messages: Vec<CosmosMsg<TerraMsgWrapper>> = Vec::new();
+
+    let denoms: Vec<String> = balance.iter().map(|item| item.denom.clone()).collect();
+
+    let exchange_rates = query_exchange_rates(&deps, String::from("uluna"), denoms)?;
+
+    let known_denoms: Vec<String> = exchange_rates
+        .exchange_rates
+        .iter()
+        .map(|item| item.quote_denom.clone())
+        .collect();
+
+    for coin in balance {
+        if coin.denom == String::from("uluna") || !known_denoms.contains(&coin.denom) {
+            continue;
+        }
+
+        messages.push(create_swap_msg(coin, String::from("uluna")));
+    }
+
+    let res = Response::new()
+    .add_messages(messages)
+    .add_attributes(vec![attr("action", "swap")]);
+
+    Ok(res)
 }
 
+
 pub fn try_withdraw_step3_send_luna(
-    _deps: DepsMut,
-    _env: Env,
-    _info: MessageInfo,
-    _amount: u64,
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: u64,
 ) -> Result<Response<TerraMsgWrapper>, ContractError> {
-    // TODO
-    Err(ContractError::NotImplemented {})
+
+    //priv check
+    let state: State = STATE.load(deps.storage)?;
+
+    if env.contract.address != info.sender {
+        return Err(ContractError::Unauthorized{});
+    }
+
+    //check balance
+    let balance: Uint128 = query_balance(&deps.querier, &env.contract.address, String::from("uluna"))?;
+
+    if balance < amount.into(){
+        return Err(ContractError::InvalidQuantity{});
+    }
+
+    //pay out uluna
+    let bank_msg = CosmosMsg::Bank(BankMsg::Send{
+        to_address: info.sender.to_string(),
+        amount: vec![
+            Coin{
+                denom: String::from("uluna"),
+                amount: amount.into(),
+            }],
+    });
+
+
+    let res = Response::new()
+        .add_attributes(vec![attr("action", "withdraw_luna")])
+        .add_message(bank_msg);
+
+    Ok(res)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn execute_withdraw(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: i32,
+) -> Result<Response, ContractError> {
+
+    //priv check
+    let state: State = STATE.load(deps.storage)?;
+
+    if state.owner != info.sender {
+        return Err(ContractError::Unauthorized{});
+    }
+
+    //valid amount check
+    if amount <= 0i32{
+        return Err(ContractError::InvalidQuantity{});
+    }
+
+    //sketchy convert
+    let amount: u64 = amount as u64;
+
+    //check balance
+    let balance: Uint128 = query_balance(&deps.querier, &env.contract.address, String::from("uluna"))?;
+
+    if balance < amount.into(){
+        return Err(ContractError::InvalidQuantity{});
+    }
+
+    //pay out uluna
+    let bank_msg = CosmosMsg::Bank(BankMsg::Send{
+        to_address: info.sender.to_string(),
+        amount: vec![
+            Coin{
+                denom: String::from("uluna"),
+                amount: amount.into(),
+            }],
+    });
+
+
+    let res = Response::new()
+        .add_attributes(vec![attr("action", "withdraw_luna")])
+        .add_message(bank_msg);
+
+    Ok(res)
 }
 
 pub fn try_start_undelegation(
@@ -135,6 +342,20 @@ pub fn query_exchange_rates(
     let res: ExchangeRatesResponse = querier.query_exchange_rates(base_denom, quote_denoms)?;
     Ok(res)
 }
+
+
+pub fn query_oracle(deps: Deps, oracle_address: Addr) -> StdResult<u64> {
+    // load price form the oracle
+    let price_response: PriceResponse =
+        deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+            contract_addr: oracle_address.to_string(),
+            msg: to_binary(&oracle_query::QueryPrice {
+            })?,
+        }))?;
+
+    Ok(price_response.price)
+}
+
 
 #[cfg(test)]
 mod tests {
