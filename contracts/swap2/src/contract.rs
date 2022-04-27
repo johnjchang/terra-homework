@@ -337,6 +337,15 @@ pub fn try_start_undelegation(
         return Err(ContractError::Unauthorized{});
     }
 
+    //quantity check
+    let delegation = deps.querier.query_delegation(env.contract.address.clone(), _VALIDATOR)?;
+
+    if let Some(delegation) = delegation{
+        if amount < delegation.amount.amount {
+            return Err(ContractError::InvalidQuantity{});
+        }
+    }
+
     //fabricate unstake
     let unstake_msg = CosmosMsg::Staking(StakingMsg::Undelegate{
         validator: _VALIDATOR.into(),
