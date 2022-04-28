@@ -186,9 +186,11 @@ pub fn collect_all_rewards(
     
     if let Ok(delegations) = delegations{
         for delegation in delegations{
-            let msg: CosmosMsg = CosmosMsg::Distribution(DistributionMsg::WithdrawDelegatorReward{
+            let msg = SubMsg::new(CosmosMsg::Distribution(DistributionMsg::WithdrawDelegatorReward{
                 validator: delegation.validator,
-            });
+            }));
+
+            messages.push(msg);
         }
     }
 
