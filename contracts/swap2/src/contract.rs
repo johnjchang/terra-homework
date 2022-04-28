@@ -171,7 +171,7 @@ pub fn try_withdraw_step1_collect_rewards(
 
     // TODO
     Ok(Response::<TerraMsgWrapper>::new()
-        .add_submessages(reward_submessages)
+        .add_submessages(submessages)
         .add_message(send_msg))
 }
 
